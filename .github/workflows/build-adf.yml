@@ -6,28 +6,7 @@ on:
     branches: [main, master]
 
 jobs:
-  host:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r26b
-      - name: build host
-        working-directory: host
-        run: |
-          CL=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
-          $CL -O2 -fPIC -shared -Wl,-e,main -o adf_host.so adf_host_so.c
-          $CL -O2 -o adf_host adf_host_so.c
-          ls -l adf_host.so adf_host
-      - uses: actions/upload-artifact@v4
-        with:
-          name: adf_host
-          path: |
-            host/adf_host.so
-            host/adf_host
-
-  modules:
+  mini:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +14,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq llvm lld clang flex bison libssl-dev bc
-      - name: fetch GKI, pin version, ENABLE MODVERSIONS
+      - name: prepare GKI with device version + modversions
         run: |
           sudo mkdir -p /opt/gki && cd /opt/gki
           curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
@@ -45,29 +24,21 @@ jobs:
           sudo sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION = -android14-11-o-g64180ab070e5/' Makefile
           sudo rm -f include/config/kernel.release include/generated/utsrelease.h .config
           sudo make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || true
-          # 关键：设备内核是 CONFIG_MODVERSIONS=y，我们必须一致
           echo 'CONFIG_MODVERSIONS=y' | sudo tee -a .config > /dev/null
-          echo 'CONFIG_MODULE_SIG=n' | sudo tee -a .config > /dev/null
           sudo make ARCH=arm64 LLVM=1 olddefconfig > /dev/null 2>&1 || true
           sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
-          echo '--- verify ---'
-          sudo grep -E 'CONFIG_MODVERSIONS' .config || echo 'MODVERSIONS NOT SET'
-          ls -l Module.symvers 2>/dev/null || echo 'no Module.symvers'
-      - name: build driver module
-        working-directory: driver
+          sudo grep CONFIG_MODVERSIONS .config
+      - name: build minimal module
+        working-directory: probe2
         run: |
-          make -f lkm.mk KDIR=/opt/gki || true
-          ls -l *.ko || echo NO-KO
-      - name: verify modversions in output
-        working-directory: driver
-        run: |
-          for f in *.ko; do
-            echo "== $f =="
-            readelf -S $f | grep -E '__versions|modinfo' || true
-            strings $f | grep -E '^vermagic=' || true
-          done
+          make -f build.mk KDIR=/opt/gki
+          ls -l adfmini.ko
+          echo '--- vermagic ---'
+          strings adfmini.ko | grep '^vermagic='
+          echo '--- sections ---'
+          readelf -S adfmini.ko | grep -E '__versions|modinfo'
       - uses: actions/upload-artifact@v4
         with:
-          name: adf_modules
-          path: driver/adf_lkm.ko
+          name: adfmini
+          path: probe2/adfmini.ko
           if-no-files-found: error
