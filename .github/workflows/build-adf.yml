@@ -54,18 +54,26 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
       - name: fetch GKI android14-6.1 and prepare
+        env:
+          TC: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64
         run: |
+          export PATH="$TC/bin:$PATH"
+          which ld.lld || echo 'still missing ld.lld'
           sudo mkdir -p /opt/gki && cd /opt/gki
           curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
-          sudo make ARCH=arm64 LLVM=1 defconfig > /dev/null
-          sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null
-          echo 'kernel tree prepared'
+          sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 defconfig > /dev/null
+          sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 modules_prepare > /dev/null
           ls include/generated/autoconf.h
       - name: build lkm
         working-directory: driver
+        env:
+          TC: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64
         run: |
-          make -f lkm.mk KDIR=/opt/gki || true
+          make -f lkm.mk KDIR=/opt/gki TOOLCHAIN=$TC || true
           ls -l *.ko || echo 'NO .ko'
       - uses: actions/upload-artifact@v4
         with:
