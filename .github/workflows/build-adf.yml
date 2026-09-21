@@ -13,77 +13,17 @@ jobs:
       - uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26b
-      - name: build host
+      - name: build host as executable .so
         working-directory: host
         run: |
           CL=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
-          $CL -O2 -static -o adf_host adf_host.c -ldl
-          ls -l adf_host
+          $CL -O2 -fPIC -shared -Wl,-e,main -o adf_host.so adf_host_so.c
+          $CL -O2 -o adf_host adf_host_so.c
+          ls -l adf_host adf_host.so
       - uses: actions/upload-artifact@v4
         with:
           name: adf_host
-          path: host/adf_host
-          retention-days: 5
-
-  kpm:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r26b
-      - run: git clone --depth 1 https://github.com/bmax121/KernelPatch.git /opt/KernelPatch
-      - name: build kpm
-        working-directory: driver
-        run: |
-          make -f kpm.mk NDK_PATH=$ANDROID_NDK_HOME KP_DIR=/opt/KernelPatch
-          ls -l adf_kpm.kpm
-      - uses: actions/upload-artifact@v4
-        with:
-          name: adf_driver_kpm
-          path: driver/adf_kpm.kpm
-          if-no-files-found: warn
-          retention-days: 5
-
-  lkm:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: install llvm toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm lld clang flex bison libssl-dev bc
-          ls -l /usr/lib/llvm-*/bin/ld.lld || true
-          command -v ld.lld || true
-      - name: fetch GKI and prepare
-        run: |
-          sudo mkdir -p /opt/gki && cd /opt/gki
-          curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
-          # 关键：内核 Makefile 用 override 定义版本，命令行传参压不过，必须直接改 Makefile
-          sudo sed -i 's/^VERSION = .*/VERSION = 6/' Makefile
-          sudo sed -i 's/^PATCHLEVEL = .*/PATCHLEVEL = 1/' Makefile
-          sudo sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 118/' Makefile
-          sudo sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION = -android14-11-o-g64180ab070e5/' Makefile
-          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) =' Makefile | head -4
-          echo "kernelrelease: $(sudo env PATH="$PATH" make -s ARCH=arm64 LLVM=1 kernelrelease 2>/dev/null)"
-          # 版本改了必须删掉缓存的 kernel.release，否则 vermagic 还是旧的
-          sudo rm -f include/config/kernel.release include/generated/utsrelease.h .config
-          sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || true
-          sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
-          echo "cached release: $(sudo cat include/config/kernel.release 2>/dev/null)"
-          sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
-          ls -l include/generated/autoconf.h || echo 'autoconf.h missing'
-          test -f Module.symvers && echo 'Module.symvers ok' || echo 'no Module.symvers (ok for external module)'
-      - name: build module
-        working-directory: driver
-        run: |
-          make -f lkm.mk KDIR=/opt/gki LLVM=1 || true
-          ls -l *.ko || echo 'NO .ko PRODUCED'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: adf_driver_lkm
-          path: driver/adf_lkm.ko
-          if-no-files-found: warn
+          path: |
+            host/adf_host.so
+            host/adf_host
           retention-days: 5
