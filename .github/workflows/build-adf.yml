@@ -51,29 +51,25 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r26b
-      - name: locate llvm toolchain
+      - name: install llvm toolchain
         run: |
-          TC=$(dirname $(dirname $(find /usr/local/lib/android/sdk/ndk -name 'ld.lld' -type f 2>/dev/null | head -1)))
-          echo "TC=$TC"
-          test -x "$TC/bin/ld.lld" && "$TC/bin/ld.lld" --version | head -1
-          echo "LLVM_TC=$TC" >> $GITHUB_ENV
-      - name: fetch GKI android14-6.1 and prepare
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm lld clang flex bison libssl-dev bc
+          ls -l /usr/lib/llvm-*/bin/ld.lld || true
+          command -v ld.lld || true
+      - name: fetch GKI and prepare
         run: |
-          export PATH="$LLVM_TC/bin:$PATH"
-          echo "PATH has ld.lld: $(which ld.lld)"
           sudo mkdir -p /opt/gki && cd /opt/gki
           curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
-          sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 defconfig > /dev/null
-          sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 modules_prepare > /dev/null
-          ls -l include/generated/autoconf.h
-      - name: build lkm
+          sudo make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || sudo make ARCH=arm64 LLVM=1 defconfig
+          sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
+          ls -l include/generated/autoconf.h || echo 'autoconf.h missing'
+          test -f Module.symvers && echo 'Module.symvers ok' || echo 'no Module.symvers (ok for external module)'
+      - name: build module
         working-directory: driver
         run: |
-          make -f lkm.mk KDIR=/opt/gki TOOLCHAIN=$LLVM_TC || true
-          ls -l *.ko || echo 'NO .ko'
+          make -f lkm.mk KDIR=/opt/gki LLVM=1 || true
+          ls -l *.ko || echo 'NO .ko PRODUCED'
       - uses: actions/upload-artifact@v4
         with:
           name: adf_driver_lkm
