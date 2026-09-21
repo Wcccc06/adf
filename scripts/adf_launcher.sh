@@ -1,34 +1,26 @@
 #!/system/bin/sh
 # ============================================================
-# adf_launcher.sh —— 流程二：下载 lib 然后点启动器
-# 对标 嗯嗯启动器.sh（他们的会读卡密 + 跑同目录 .so）
-# 我们这版：不读卡密、不联网，直接起宿主
-# 用法(root): sh adf_launcher.sh
+# adf_launcher.sh —— 启动器（对标 嗯嗯启动器.sh）
+# 用法(root): sh adf_launcher.sh [卡密]
+#   卡密参数保留是为了跟他们的用法一致；我们不校验、不联网。
 # ============================================================
 set -u
+D=/data/adb/adf
+SO=$D/adf_host.so
 
-DIR=/data/adb/adf
-HOST="$DIR/adf_host"
+echo '[adf] start'
+[ "$(id -u)" = 0 ] || { echo '[adf] need root'; exit 1; }
+[ -f "$SO" ] || { echo "[adf] missing $SO"; exit 1; }
 
-echo "[adf] 启动器"
-[ "$(id -u)" = "0" ] || { echo "[adf] 需要 root"; exit 1; }
+chown 0:0 "$SO" 2>/dev/null
+chmod 0755 "$SO"
 
-# 1) 驱动在不在
-if [ ! -d /sys/module/adf_driver ]; then
-  echo "[adf] 驱动没加载，先跑 adf_driver_load.sh"
-  exit 1
+if [ -d /sys/module/adf_lkm ]; then
+  echo 1 > /sys/module/adf_lkm/parameters/hide_proc 2>/dev/null
+  echo 1 > /sys/module/adf_lkm/parameters/hide_adb  2>/dev/null
+  echo '[adf] kernel module linked: hide_proc=1 hide_adb=1'
+else
+  echo '[adf] note: kernel module not loaded; ADB path hiding needs it'
 fi
 
-# 2) 宿主存在性与权限（他们给 0777，我们给 0755；可执行就够了）
-[ -x "$HOST" ] || { echo "[adf] 缺少宿主 $HOST"; exit 1; }
-chmod 0755 "$HOST"
-chown 0:0 "$HOST"
-
-# 3) 下发配置
-echo 1 > /sys/module/adf_driver/parameters/hide_proc 2>/dev/null
-echo 1 > /sys/module/adf_driver/parameters/hide_adb  2>/dev/null
-echo 0 > /sys/module/adf_driver/parameters/filter_tgid 2>/dev/null
-
-# 4) 起宿主
-echo "[adf] 宿主启动"
-exec "$HOST" status
+exec "$SO" status
