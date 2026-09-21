@@ -1,21 +1,21 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * adf_kpm.c - 内核模块（KernelPatch KPM 形式）
- * 只用 KernelPatch 提供的精简头，不用完整内核头 —— 这样才编得出来。
  *
- * 挂钩系统调用，在返回用户态之前把"进程信息"和"ADB 路径"抹掉：
- *   getdents64  -> 过滤目录项（ls / ps / readdir 全走这里）
- *   openat      -> 命中隐藏路径，返回 ENOENT
+ * 只使用 KernelPatch 实际导出的 API（已核对头文件）：
+ *   compat_strncpy_from_user(char*, const char __user*, long)   —— 读用户态字符串
+ *   compat_copy_to_user(void __user*, const void*, int)          —— 写用户态（反向用于读 8 字节字段）
+ *   hook_syscalln / unhook_syscalln / syscall_argn / skip_origin —— syscall 挂钩
  *
- * 来源：KernelPatch (GPL-2.0) 的 hook API + syscall 文档；
- *       idandev/hidefile-kernel-module (Apache-2.0) 的 getdents64 过滤思路。
+ * 功能：隐藏进程信息 + 隐藏 ADB 路径
+ *   getdents64 后置回调：把命中名单的目录项从返回缓冲区里挤掉
+ *   openat 前置回调：命中隐藏路径直接返回 -ENOENT
  */
 #include <compiler.h>
 #include <kpmodule.h>
 #include <kputils.h>
 #include <hook.h>
 #include <syscall.h>
-#include <kallsyms.h>
 #include <linux/printk.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
@@ -31,7 +31,7 @@ KPM_DESCRIPTION("hide process info and ADB paths at the syscall layer");
 #define ADF_MAX_PATHS 24
 #define ADF_NAME_LEN  32
 #define ADF_PATH_LEN  96
-#define ADF_BUF       512
+#define ADF_ENT_MAX   256
 
 static int adf_enabled = 1;
 static int hide_proc = 1;
@@ -50,7 +50,7 @@ static const char *const k_paths[] = {
     "/data/local/tmp/adb", "/data/misc/adb", "/dev/usb-ffs/adb",
 };
 
-/* ---------------- 字符串（内核里不用 libc） ---------------- */
+/* ---------------- 字符串工具（内核里没有 libc） ---------------- */
 
 static int s_eq(const char *a, const char *b)
 {
@@ -98,64 +98,78 @@ static int path_hidden(const char *p)
     return 0;
 }
 
-/* ---------------- getdents64：过滤目录项 ---------------- */
+/* 反向读用户态（compat_copy_to_user 当 from_user 用，需绕开 __user 检查） */
+static int u_read(void *dst, const char *src, int n)
+{
+    return compat_copy_to_user((void __user *)dst, (const void *)src, n);
+}
 
-/* linux_dirent64 布局（用户态可见的部分，不用内核头也能定义） */
-struct adf_dirent64 {
-    uint64_t d_ino;
-    int64_t  d_off;
-    unsigned short d_reclen;
-    unsigned char  d_type;
-    char d_name[];
-};
+/* 读用户态 d_reclen（目录项头两个字段，前 8 字节里的低 2 字节） */
+static int u_reclen(const char *p)
+{
+    unsigned char hdr[8];
+    if (u_read(hdr, p, 8) != 0) return -1;
+    return (int)(hdr[4] | (hdr[5] << 8));
+}
+
+/* 挤压式过滤：把保留的目录项往前挪，尾部留残渣 */
+static void compact_block(char __user *base, long from, long to, long n)
+{
+    char tmp[ADF_ENT_MAX];
+    long done = 0;
+    while (done < n) {
+        int chunk = (int)(n - done);
+        if (chunk > (int)sizeof(tmp)) chunk = (int)sizeof(tmp);
+        if (u_read(tmp, (const char *)(base + from + done), chunk) != 0) return;
+        if (compat_copy_to_user((void __user *)(base + to + done), tmp, chunk) != 0) return;
+        done += chunk;
+    }
+}
+
+/* ---------------- getdents64 后置：过滤目录项 ---------------- */
 
 static void getdents64_after(hook_fargs3_t *args, void *udata)
 {
-    long ret;
-    void __user *ubuf;
-    char kbuf[ADF_BUF];
-    long out = 0, pos = 0;
+    char __user *base;
+    long ret, pos = 0, out = 0;
 
     if (!adf_enabled) return;
 
     ret = (long)args->ret;
-    if (ret <= 0 || ret > ADF_BUF) return;
+    if (ret <= 0) return;
 
-    ubuf = (void __user *)syscall_argn(args, 1);
-    if (!ubuf) return;
-    if (compat_copy_from_user(kbuf, ubuf, ret) != 0) return;
+    base = (char __user *)syscall_argn(args, 1);
+    if (!base) return;
 
-    while (pos + (long)sizeof(struct adf_dirent64) <= ret) {
-        struct adf_dirent64 *d = (struct adf_dirent64 *)(kbuf + pos);
+    while (pos + 19 <= ret) {
+        int reclen = u_reclen((const char *)(base + pos));
+        char name[ADF_ENT_MAX];
         int drop = 0;
 
-        if (d->d_reclen < sizeof(struct adf_dirent64)) break;
-        if (pos + d->d_reclen > ret) break;
+        if (reclen < 19 || pos + reclen > ret) break;
 
-        if (name_hidden(d->d_name)) drop = 1;
+        if (compat_strncpy_from_user(name, (const char __user *)(base + pos + 19),
+                                     sizeof(name) - 1) >= 0) {
+            name[sizeof(name) - 1] = 0;
+            if (name_hidden(name)) drop = 1;
+        }
 
         if (!drop) {
-            if (out != pos) memmove(kbuf + out, kbuf + pos, d->d_reclen);
-            out += d->d_reclen;
+            if (out != pos) compact_block(base, pos, out, reclen);
+            out += reclen;
         }
-        pos += d->d_reclen;
+        pos += reclen;
     }
 
-    if (out != ret) {
-        if (out == 0) {
-            args->ret = 0;
-        } else if (compat_copy_to_user(ubuf, kbuf, out) == 0) {
-            args->ret = out;
-        }
-    }
+    if (out != ret) args->ret = out;
 }
 
-/* ---------------- openat：拦路径 ---------------- */
+/* ---------------- openat 前置：拦路径 ---------------- */
 
 static void openat_before(hook_fargs4_t *args, void *udata)
 {
-    const char __user *up;
     char path[ADF_PATH_LEN];
+    const char __user *up;
 
     if (!adf_enabled) return;
     up = (const char __user *)syscall_argn(args, 1);
@@ -163,14 +177,15 @@ static void openat_before(hook_fargs4_t *args, void *udata)
 
     memset(path, 0, sizeof(path));
     if (compat_strncpy_from_user(path, up, sizeof(path) - 1) < 0) return;
+    path[sizeof(path) - 1] = 0;
 
     if (path_hidden(path)) {
         args->ret = -2;          /* -ENOENT */
-        args->skip_origin = 1;   /* 跳过原 syscall 实现 */
+        args->skip_origin = 1;   /* 不执行原 syscall */
     }
 }
 
-/* ---------------- 配置（用户态用 ksud kpm control 下发） ---------------- */
+/* ---------------- 配置下发（ksud kpm control adf "..."） ---------------- */
 
 static void add_name(const char *v)
 {
@@ -225,20 +240,23 @@ static long adf_init(const char *args, const char *event, void *__user reserved)
     rc = hook_syscalln(__NR_openat, 4, openat_before, NULL, NULL);
     pr_info("adf: hook openat rc=%d\n", rc);
 
-    pr_info("adf: loaded names=%d paths=%d hide_proc=%d hide_adb=%d\n",
-            name_count, path_count, hide_proc, hide_adb);
+    pr_info("adf: loaded names=%d paths=%d\n", name_count, path_count);
     return 0;
 }
 
 static long adf_control0(const char *args, char *__user out_msg, int outlen)
 {
-    char out[128];
-    int n;
+    char out[64];
+    int n = 0;
 
     parse_args(args);
 
-    n = snprintf(out, sizeof(out), "enabled=%d names=%d paths=%d hide_proc=%d hide_adb=%d\n",
-                 adf_enabled, name_count, path_count, hide_proc, hide_adb);
+    s_copy(out, "adf enabled=", sizeof(out));
+    n = 12;
+    out[n++] = (char)('0' + (adf_enabled ? 1 : 0));
+    out[n++] = '\n';
+    out[n] = 0;
+
     if (out_msg && outlen > 0) compat_copy_to_user(out_msg, out, n < outlen ? n : outlen);
     return 0;
 }
