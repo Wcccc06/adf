@@ -84,7 +84,7 @@ static void getdents64_post(struct kprobe *p, struct pt_regs *regs, unsigned lon
 
     if (adf_skip()) return;
     ret = (long)regs->regs[0];
-    if (ret <= 0) return;
+    if (ret <= 0) return;   /* 无数据可过滤 */
     ubuf = (void __user *)regs->regs[1];
     if (!ubuf) return;
 
