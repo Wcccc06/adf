@@ -57,9 +57,15 @@ jobs:
       - uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26b
+      - name: locate llvm toolchain
+        run: |
+          TC=$(dirname $(dirname $(find /usr/local/lib/android/sdk/ndk /opt/hostedtoolcache -name 'ld.lld' -type f 2>/dev/null | head -1)))
+          echo "found TC=$TC"
+          "$TC/bin/ld.lld" --version
+          "$TC/bin/clang" --version | head -1
+          echo "TC=$TC" >> $GITHUB_ENV
       - name: fetch GKI android14-6.1 and prepare
         env:
-          TC: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64
         run: |
           export PATH="$TC/bin:$PATH"
           which ld.lld || echo 'still missing ld.lld'
@@ -71,7 +77,6 @@ jobs:
       - name: build lkm
         working-directory: driver
         env:
-          TC: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64
         run: |
           make -f lkm.mk KDIR=/opt/gki TOOLCHAIN=$TC || true
           ls -l *.ko || echo 'NO .ko'
