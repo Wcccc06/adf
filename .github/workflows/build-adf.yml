@@ -61,7 +61,12 @@ jobs:
         run: |
           sudo mkdir -p /opt/gki && cd /opt/gki
           curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
-          sudo make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || sudo make ARCH=arm64 LLVM=1 defconfig
+          # 关键：让编译出来的版本号与设备内核一致（6.1.118-android14-11-o-g64180ab070e5）
+          sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 \
+            VERSION=6 PATCHLEVEL=1 SUBLEVEL=118 EXTRAVERSION= \
+            LOCALVERSION=-android14-11-o-g64180ab070e5 defconfig > /dev/null 2>&1 || true
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION|LOCALVERSION) ?=' Makefile | head -5
+          echo "kernelrelease: $(sudo env PATH="$PATH" make -s ARCH=arm64 LLVM=1 kernelrelease 2>/dev/null)"
           sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
           ls -l include/generated/autoconf.h || echo 'autoconf.h missing'
           test -f Module.symvers && echo 'Module.symvers ok' || echo 'no Module.symvers (ok for external module)'
