@@ -76,17 +76,17 @@ static bool path_hidden(const char *p)
 
 /* ---------------- getdents64 过滤 ---------------- */
 
-static int getdents64_post(struct kprobe *p, struct pt_regs *regs, unsigned long flags)
+static void getdents64_post(struct kprobe *p, struct pt_regs *regs, unsigned long flags)
 {
     long ret;
     void __user *ubuf;
     long pos = 0, out = 0;
 
-    if (adf_skip()) return 0;
+    if (adf_skip()) return;
     ret = (long)regs->regs[0];
-    if (ret <= 0) return 0;
+    if (ret <= 0) return;
     ubuf = (void __user *)regs->regs[1];
-    if (!ubuf) return 0;
+    if (!ubuf) return;
 
     while (pos + (long)sizeof(struct linux_dirent64) <= ret) {
         struct linux_dirent64 hdr;
@@ -119,7 +119,6 @@ static int getdents64_post(struct kprobe *p, struct pt_regs *regs, unsigned long
     }
 
     if (out != ret) regs->regs[0] = out;
-    return 0;
 }
 
 /* ---------------- do_filp_open 拦截 ---------------- */
@@ -146,17 +145,16 @@ static int filp_open_pre(struct kprobe *p, struct pt_regs *regs)
     return 0;
 }
 
-static int filp_open_post(struct kprobe *p, struct pt_regs *regs, unsigned long flags)
+static void filp_open_post(struct kprobe *p, struct pt_regs *regs, unsigned long flags)
 {
     struct file *fp;
 
-    if (!this_cpu_read(adf_hit)) return 0;
+    if (!this_cpu_read(adf_hit)) return;
     this_cpu_write(adf_hit, 0);
 
     fp = (struct file *)regs->regs[0];
     if (fp && !IS_ERR(fp)) filp_close(fp, NULL);
     regs->regs[0] = (unsigned long)ERR_PTR(-ENOENT);
-    return 0;
 }
 
 /* ---------------- 安装 / 卸载 ---------------- */
