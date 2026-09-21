@@ -13,17 +13,54 @@ jobs:
       - uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26b
-      - name: build host as executable .so
+      - name: build host
         working-directory: host
         run: |
           CL=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
           $CL -O2 -fPIC -shared -Wl,-e,main -o adf_host.so adf_host_so.c
           $CL -O2 -o adf_host adf_host_so.c
-          ls -l adf_host adf_host.so
+          ls -l adf_host.so adf_host
       - uses: actions/upload-artifact@v4
         with:
           name: adf_host
           path: |
             host/adf_host.so
             host/adf_host
-          retention-days: 5
+
+  modules:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: install llvm
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm lld clang flex bison libssl-dev bc
+      - name: fetch GKI and pin version
+        run: |
+          sudo mkdir -p /opt/gki && cd /opt/gki
+          curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
+          sudo sed -i 's/^VERSION = .*/VERSION = 6/' Makefile
+          sudo sed -i 's/^PATCHLEVEL = .*/PATCHLEVEL = 1/' Makefile
+          sudo sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 118/' Makefile
+          sudo sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION = -android14-11-o-g64180ab070e5/' Makefile
+          sudo rm -f include/config/kernel.release include/generated/utsrelease.h .config
+          sudo make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || true
+          sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
+      - name: build minimal probe
+        working-directory: probe
+        run: |
+          make -f mk.mk KDIR=/opt/gki || true
+          ls -l *.ko || echo NO-KO
+      - name: build full module
+        working-directory: driver
+        run: |
+          make -f lkm.mk KDIR=/opt/gki || true
+          ls -l *.ko || echo NO-KO
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adf_modules
+          path: |
+            probe/adfmini.ko
+            driver/adf_lkm.ko
+          if-no-files-found: warn
