@@ -6,7 +6,6 @@ on:
     branches: [main, master]
 
 jobs:
-  # ---- 1. 宿主（用户态，最稳，先拿到手）----
   host:
     runs-on: ubuntu-latest
     steps:
@@ -19,14 +18,13 @@ jobs:
         run: |
           CL=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
           $CL -O2 -static -o adf_host adf_host.c -ldl
-          file adf_host && ls -l adf_host
+          ls -l adf_host
       - uses: actions/upload-artifact@v4
         with:
           name: adf_host
           path: host/adf_host
           retention-days: 5
 
-  # ---- 2. KPM 模块（用 KPM 模板的构建方式：NDK + KernelPatch 头文件）----
   kpm:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -35,42 +33,19 @@ jobs:
       - uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26b
-      - name: clone KernelPatch (headers only)
+      - name: clone KernelPatch headers
         run: |
           git clone --depth 1 https://github.com/bmax121/KernelPatch.git /opt/KernelPatch
-          ls /opt/KernelPatch/kernel/include | head
+          ls /opt/KernelPatch/kernel/include | head -5
       - name: build kpm
         working-directory: driver
         run: |
-          make -f Makefile.kpm NDK_PATH=$ANDROID_NDK_HOME KP_DIR=/opt/KernelPatch || true
-          ls -l *.kpm || echo 'NO .kpm PRODUCED'
+          make -f kpm.mk NDK_PATH=$ANDROID_NDK_HOME KP_DIR=/opt/KernelPatch
+          echo '--- build result ---'
+          ls -l *.kpm && file adf_driver.kpm
       - uses: actions/upload-artifact@v4
         with:
           name: adf_driver_kpm
-          path: driver/*.kpm
-          if-no-files-found: warn
-          retention-days: 5
-
-  # ---- 3. 纯 LKM 模块（不走 KPM，给不支持 KPM 的内核用，允许失败）----
-  lkm:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: fetch GKI android14-6.1
-        run: |
-          sudo mkdir -p /opt/gki && cd /opt/gki
-          curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
-          sudo make ARCH=arm64 LLVM=1 defconfig >/dev/null 2>&1 || true
-          ls | head -3
-      - name: build lkm
-        working-directory: driver
-        run: |
-          sudo make -C /opt/gki M=$PWD ARCH=arm64 LLVM=1 CC=clang modules || true
-          ls -l *.ko || echo 'NO .ko PRODUCED'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: adf_driver_lkm
-          path: driver/*.ko
-          if-no-files-found: warn
+          path: driver/adf_driver.kpm
+          if-no-files-found: error
           retention-days: 5
