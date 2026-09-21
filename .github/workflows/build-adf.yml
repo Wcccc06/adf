@@ -1,0 +1,42 @@
+name: build-adf
+on:
+  push:
+    paths: ['driver/**', 'host/**', '.github/workflows/build-adf.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+
+      - name: build host (userspace)
+        working-directory: host
+        run: |
+          CL=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
+          $CL -O2 -static -o adf_host adf_host.c -ldl
+          ls -l adf_host
+
+      - name: fetch GKI 6.1 kernel sources
+        run: |
+          mkdir -p /opt/gki && cd /opt/gki
+          curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | tar xz
+          ls | head
+
+      - name: build driver (LKM)
+        working-directory: driver
+        run: |
+          make -C /opt/gki M=$PWD ARCH=arm64 LLVM=1 CC=clang modules || true
+          ls -l *.ko || echo 'no .ko produced'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adf-build
+          path: |
+            host/adf_host
+            driver/*.ko
