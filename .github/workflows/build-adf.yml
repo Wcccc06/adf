@@ -1,13 +1,12 @@
 name: build-adf
 
-# 触发：手动点一下，或推送代码时自动跑
 on:
   workflow_dispatch:
   push:
     branches: [main, master]
 
 jobs:
-  # 第一步：编宿主（纯用户态，NDK 一把过，用来先验证整条流水线通）
+  # ---- 1. 宿主（用户态，最稳，先拿到手）----
   host:
     runs-on: ubuntu-latest
     steps:
@@ -20,38 +19,58 @@ jobs:
         run: |
           CL=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
           $CL -O2 -static -o adf_host adf_host.c -ldl
-          file adf_host
-          ls -l adf_host
+          file adf_host && ls -l adf_host
       - uses: actions/upload-artifact@v4
         with:
           name: adf_host
           path: host/adf_host
-          retention-days: 3
+          retention-days: 5
 
-  # 第二步：编内核驱动（要 GKI 源码 + 配置，允许失败，失败不影响宿主产物）
-  driver:
-    runs-on: ubuntu-large
+  # ---- 2. KPM 模块（用 KPM 模板的构建方式：NDK + KernelPatch 头文件）----
+  kpm:
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: fetch GKI android14-6.1 sources
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+      - name: clone KernelPatch (headers only)
+        run: |
+          git clone --depth 1 https://github.com/bmax121/KernelPatch.git /opt/KernelPatch
+          ls /opt/KernelPatch/kernel/include | head
+      - name: build kpm
+        working-directory: driver
+        run: |
+          make -f Makefile.kpm NDK_PATH=$ANDROID_NDK_HOME KP_DIR=/opt/KernelPatch || true
+          ls -l *.kpm || echo 'NO .kpm PRODUCED'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adf_driver_kpm
+          path: driver/*.kpm
+          if-no-files-found: warn
+          retention-days: 5
+
+  # ---- 3. 纯 LKM 模块（不走 KPM，给不支持 KPM 的内核用，允许失败）----
+  lkm:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: fetch GKI android14-6.1
         run: |
           sudo mkdir -p /opt/gki && cd /opt/gki
           curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
-          ls | head -5
-      - name: prepare kernel config
-        run: |
-          cd /opt/gki
-          sudo make ARCH=arm64 LLVM=1 defconfig || true
-          echo 'CONFIG_MODULES=y' | sudo tee -a .config >/dev/null
-      - name: build module
+          sudo make ARCH=arm64 LLVM=1 defconfig >/dev/null 2>&1 || true
+          ls | head -3
+      - name: build lkm
         working-directory: driver
         run: |
-          sudo make -C /opt/gki M=$PWD ARCH=arm64 LLVM=1 modules || true
+          sudo make -C /opt/gki M=$PWD ARCH=arm64 LLVM=1 CC=clang modules || true
           ls -l *.ko || echo 'NO .ko PRODUCED'
       - uses: actions/upload-artifact@v4
         with:
-          name: adf_driver
+          name: adf_driver_lkm
           path: driver/*.ko
           if-no-files-found: warn
-          retention-days: 3
+          retention-days: 5
