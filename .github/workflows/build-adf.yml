@@ -29,14 +29,13 @@ jobs:
 
   modules:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: install llvm
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq llvm lld clang flex bison libssl-dev bc
-      - name: fetch GKI and pin version
+      - name: fetch GKI, pin version, ENABLE MODVERSIONS
         run: |
           sudo mkdir -p /opt/gki && cd /opt/gki
           curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
@@ -46,21 +45,29 @@ jobs:
           sudo sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION = -android14-11-o-g64180ab070e5/' Makefile
           sudo rm -f include/config/kernel.release include/generated/utsrelease.h .config
           sudo make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || true
+          # 关键：设备内核是 CONFIG_MODVERSIONS=y，我们必须一致
+          echo 'CONFIG_MODVERSIONS=y' | sudo tee -a .config > /dev/null
+          echo 'CONFIG_MODULE_SIG=n' | sudo tee -a .config > /dev/null
+          sudo make ARCH=arm64 LLVM=1 olddefconfig > /dev/null 2>&1 || true
           sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
-      - name: build minimal probe
-        working-directory: probe
-        run: |
-          make -f mk.mk KDIR=/opt/gki || true
-          ls -l *.ko || echo NO-KO
-      - name: build full module
+          echo '--- verify ---'
+          sudo grep -E 'CONFIG_MODVERSIONS' .config || echo 'MODVERSIONS NOT SET'
+          ls -l Module.symvers 2>/dev/null || echo 'no Module.symvers'
+      - name: build driver module
         working-directory: driver
         run: |
           make -f lkm.mk KDIR=/opt/gki || true
           ls -l *.ko || echo NO-KO
+      - name: verify modversions in output
+        working-directory: driver
+        run: |
+          for f in *.ko; do
+            echo "== $f =="
+            readelf -S $f | grep -E '__versions|modinfo' || true
+            strings $f | grep -E '^vermagic=' || true
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: adf_modules
-          path: |
-            probe/adfmini.ko
-            driver/adf_lkm.ko
-          if-no-files-found: warn
+          path: driver/adf_lkm.ko
+          if-no-files-found: error
