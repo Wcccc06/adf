@@ -65,7 +65,7 @@ jobs:
           sudo sed -i 's/^VERSION = .*/VERSION = 6/' Makefile
           sudo sed -i 's/^PATCHLEVEL = .*/PATCHLEVEL = 1/' Makefile
           sudo sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 118/' Makefile
-          sudo sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
+          sudo sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION = -android14-11-o-g64180ab070e5/' Makefile
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) =' Makefile | head -4
           echo "kernelrelease: $(sudo env PATH="$PATH" make -s ARCH=arm64 LLVM=1 kernelrelease 2>/dev/null)"
           sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || true
