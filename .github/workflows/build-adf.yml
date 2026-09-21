@@ -6,7 +6,6 @@ on:
     branches: [main, master]
 
 jobs:
-  # 1. 宿主（用户态，稳定）
   host:
     runs-on: ubuntu-latest
     steps:
@@ -26,7 +25,6 @@ jobs:
           path: host/adf_host
           retention-days: 5
 
-  # 2. KPM（给 KernelPatch 内核用；本机内核不支持，留作备份）
   kpm:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -48,7 +46,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 5
 
-  # 3. 标准 LKM + kprobe（本机内核走这条）
   lkm:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -59,26 +56,23 @@ jobs:
           ndk-version: r26b
       - name: locate llvm toolchain
         run: |
-          TC=$(dirname $(dirname $(find /usr/local/lib/android/sdk/ndk /opt/hostedtoolcache -name 'ld.lld' -type f 2>/dev/null | head -1)))
-          echo "found TC=$TC"
-          "$TC/bin/ld.lld" --version
-          "$TC/bin/clang" --version | head -1
-          echo "TC=$TC" >> $GITHUB_ENV
+          TC=$(dirname $(dirname $(find /usr/local/lib/android/sdk/ndk -name 'ld.lld' -type f 2>/dev/null | head -1)))
+          echo "TC=$TC"
+          test -x "$TC/bin/ld.lld" && "$TC/bin/ld.lld" --version | head -1
+          echo "LLVM_TC=$TC" >> $GITHUB_ENV
       - name: fetch GKI android14-6.1 and prepare
-        env:
         run: |
-          export PATH="$TC/bin:$PATH"
-          which ld.lld || echo 'still missing ld.lld'
+          export PATH="$LLVM_TC/bin:$PATH"
+          echo "PATH has ld.lld: $(which ld.lld)"
           sudo mkdir -p /opt/gki && cd /opt/gki
           curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
           sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 defconfig > /dev/null
           sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 modules_prepare > /dev/null
-          ls include/generated/autoconf.h
+          ls -l include/generated/autoconf.h
       - name: build lkm
         working-directory: driver
-        env:
         run: |
-          make -f lkm.mk KDIR=/opt/gki TOOLCHAIN=$TC || true
+          make -f lkm.mk KDIR=/opt/gki TOOLCHAIN=$LLVM_TC || true
           ls -l *.ko || echo 'NO .ko'
       - uses: actions/upload-artifact@v4
         with:
