@@ -68,7 +68,11 @@ jobs:
           sudo sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION = -android14-11-o-g64180ab070e5/' Makefile
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) =' Makefile | head -4
           echo "kernelrelease: $(sudo env PATH="$PATH" make -s ARCH=arm64 LLVM=1 kernelrelease 2>/dev/null)"
+          # 版本改了必须删掉缓存的 kernel.release，否则 vermagic 还是旧的
+          sudo rm -f include/config/kernel.release include/generated/utsrelease.h .config
           sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || true
+          sudo env PATH="$PATH" make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
+          echo "cached release: $(sudo cat include/config/kernel.release 2>/dev/null)"
           sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
           ls -l include/generated/autoconf.h || echo 'autoconf.h missing'
           test -f Module.symvers && echo 'Module.symvers ok' || echo 'no Module.symvers (ok for external module)'
