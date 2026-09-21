@@ -27,7 +27,6 @@ jobs:
 
   kpm:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: nttld/setup-ndk@v1
@@ -41,11 +40,11 @@ jobs:
         working-directory: driver
         run: |
           make -f kpm.mk NDK_PATH=$ANDROID_NDK_HOME KP_DIR=/opt/KernelPatch
-          echo '--- build result ---'
-          ls -l *.kpm && file adf_driver.kpm
+          echo '--- result ---'
+          ls -l adf_kpm.kpm && file adf_kpm.kpm
       - uses: actions/upload-artifact@v4
         with:
           name: adf_driver_kpm
-          path: driver/adf_driver.kpm
+          path: driver/adf_kpm.kpm
           if-no-files-found: error
           retention-days: 5
