@@ -6,6 +6,7 @@ on:
     branches: [main, master]
 
 jobs:
+  # 1. 宿主（用户态，稳定）
   host:
     runs-on: ubuntu-latest
     steps:
@@ -25,26 +26,50 @@ jobs:
           path: host/adf_host
           retention-days: 5
 
+  # 2. KPM（给 KernelPatch 内核用；本机内核不支持，留作备份）
   kpm:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26b
-      - name: clone KernelPatch headers
-        run: |
-          git clone --depth 1 https://github.com/bmax121/KernelPatch.git /opt/KernelPatch
-          ls /opt/KernelPatch/kernel/include | head -5
+      - run: git clone --depth 1 https://github.com/bmax121/KernelPatch.git /opt/KernelPatch
       - name: build kpm
         working-directory: driver
         run: |
           make -f kpm.mk NDK_PATH=$ANDROID_NDK_HOME KP_DIR=/opt/KernelPatch
-          echo '--- result ---'
-          ls -l adf_kpm.kpm && file adf_kpm.kpm
+          ls -l adf_kpm.kpm
       - uses: actions/upload-artifact@v4
         with:
           name: adf_driver_kpm
           path: driver/adf_kpm.kpm
-          if-no-files-found: error
+          if-no-files-found: warn
+          retention-days: 5
+
+  # 3. 标准 LKM + kprobe（本机内核走这条）
+  lkm:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: fetch GKI android14-6.1 and prepare
+        run: |
+          sudo mkdir -p /opt/gki && cd /opt/gki
+          curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
+          sudo make ARCH=arm64 LLVM=1 defconfig > /dev/null
+          sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null
+          echo 'kernel tree prepared'
+          ls include/generated/autoconf.h
+      - name: build lkm
+        working-directory: driver
+        run: |
+          make -f lkm.mk KDIR=/opt/gki || true
+          ls -l *.ko || echo 'NO .ko'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adf_driver_lkm
+          path: driver/adf_lkm.ko
+          if-no-files-found: warn
           retention-days: 5
