@@ -6,39 +6,27 @@ on:
     branches: [main, master]
 
 jobs:
-  mini:
+  stealth-kpm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: install llvm
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+      - name: clone KernelPatch headers
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm lld clang flex bison libssl-dev bc
-      - name: prepare GKI with device version + modversions
+          git clone --depth 1 https://github.com/bmax121/KernelPatch.git /opt/KernelPatch
+          ls /opt/KernelPatch/kernel/include | head -5
+      - name: build adf-stealth.kpm
+        working-directory: kpm
         run: |
-          sudo mkdir -p /opt/gki && cd /opt/gki
-          curl -sL 'https://android.googlesource.com/kernel/common/+archive/refs/heads/android14-6.1.tar.gz' | sudo tar xz
-          sudo sed -i 's/^VERSION = .*/VERSION = 6/' Makefile
-          sudo sed -i 's/^PATCHLEVEL = .*/PATCHLEVEL = 1/' Makefile
-          sudo sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 118/' Makefile
-          sudo sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION = -android14-11-o-g64180ab070e5/' Makefile
-          sudo rm -f include/config/kernel.release include/generated/utsrelease.h .config
-          sudo make ARCH=arm64 LLVM=1 defconfig > /dev/null 2>&1 || true
-          echo 'CONFIG_MODVERSIONS=y' | sudo tee -a .config > /dev/null
-          sudo make ARCH=arm64 LLVM=1 olddefconfig > /dev/null 2>&1 || true
-          sudo make ARCH=arm64 LLVM=1 modules_prepare > /dev/null 2>&1 || true
-          sudo grep CONFIG_MODVERSIONS .config
-      - name: build minimal module
-        working-directory: probe2
-        run: |
-          make -f build.mk KDIR=/opt/gki
-          ls -l adfmini.ko
-          echo '--- vermagic ---'
-          strings adfmini.ko | grep '^vermagic='
-          echo '--- sections ---'
-          readelf -S adfmini.ko | grep -E '__versions|modinfo'
+          make NDK_PATH=$ANDROID_NDK_HOME KP_DIR=/opt/KernelPatch
+          ls -l adf_stealth.kpm
+          file adf_stealth.kpm
+          readelf -S adf_stealth.kpm | grep -E 'kpm' || true
       - uses: actions/upload-artifact@v4
         with:
-          name: adfmini
-          path: probe2/adfmini.ko
+          name: adf_stealth_kpm
+          path: kpm/adf_stealth.kpm
           if-no-files-found: error
+          retention-days: 7
